@@ -146,18 +146,20 @@ class Webservice:
     headers = {
         'Content-Type': 'application/json'
     }
-    authenticated = asyncio.Event()
+    connected = asyncio.Event()
 
-    def __init__(self, base_url, terminal):
+    def __init__(self, base_url, terminal, username, password):
         self.terminal = terminal
+        self.username = username
+        self.password = password
         self.token_url = '{b}/auth/token/'.format(b=base_url)
         self.clock_url = '{b}/v1/attendance/clock/'.format(b=base_url)
 
-    async def authenticate(self, username, password):
+    async def connect(self):
         logger.debug('Fetching new token')
         body = {
-            'username': username,
-            'password': password
+            'username': self.username,
+            'password': self.password
         }
         async with aiohttp.ClientSession(headers=self.headers) as session:
             while not self.session:
@@ -182,14 +184,14 @@ class Webservice:
                         )
                         for waiter in self.waiters:
                             await waiter.wait()
-                        if not self.authenticated.is_set():
-                            self.authenticated.set()
+                        if not self.connected.is_set():
+                            self.connected.set()
                 except (aiohttp.ClientError, aiohttp.HttpProcessingError) as e:
                     logger.warn('Could not authenticate: {e}'.format(e=e))
                     await asyncio.sleep(5)
 
     async def ready(self, *args):
-        await self.authenticated.wait()
+        await self.connected.wait()
         # Notify all listeners that our API connection is ready
         logger.debug('API is ready')
         data = {
@@ -198,6 +200,17 @@ class Webservice:
         }
         tasks = [callback(data) for callback in self.callbacks]
         await asyncio.gather(*tasks)
+
+    async def unready(self, *args):
+        # Notify all listeners that our API connection has been lost
+        logger.debug('API is not ready')
+        data = {
+            'type': 'unready',
+            'service': 'api',
+        }
+        tasks = [callback(data) for callback in self.callbacks]
+        await asyncio.gather(*tasks)
+        await self.connect()
 
     async def clock(self, uid):
         for waiter in self.waiters:
@@ -226,11 +239,12 @@ class Webservice:
                     'type': 'response',
                     'payload': response
                 }
-        except aiohttp.ClientError:
+        except (aiohttp.ClientError, asyncio.TimeoutError):
             data = {
                 'type': 'error',
                 'message': _('Network error')
             }
+            asyncio.ensure_future(self.unready())
         except aiohttp.HttpProcessingError as e:
             errors = {
                 404: _('Your card is invalid')
@@ -270,7 +284,9 @@ def cli(terminal, api, username, password, http_host, http_port, ws_host,
     cardreader = CardReader(reader, loop)
     webservice = Webservice(
         api,
-        terminal
+        terminal,
+        username,
+        password
     )
     websocket = Websocket()
     browser = Browser(
@@ -290,7 +306,7 @@ def cli(terminal, api, username, password, http_host, http_port, ws_host,
 
     tasks = asyncio.gather(
         loop.create_server(app.make_handler(), http_host, http_port),
-        webservice.authenticate(username, password),
+        webservice.connect(),
         cardreader.run(),
         websockets.serve(websocket.connector, ws_host, ws_port),
         browser.run()
