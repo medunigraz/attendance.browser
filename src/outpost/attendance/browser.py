@@ -1,15 +1,14 @@
-import click
 import asyncio
 import concurrent.futures
+import gettext
 import json
 import logging
 import os
 
-import gettext
-
 import aiohttp
-
+import click
 import websockets
+from aiohttp import web
 from pyrc522 import RFID
 from RPi import GPIO
 
@@ -247,13 +246,16 @@ class Webservice:
 
 @click.command()
 @click.option('--terminal')
-@click.option('--url')
 @click.option('--api')
 @click.option('--username')
 @click.option('--password')
+@click.option('--http-host', default='localhost')
+@click.option('--http-port', default=6788)
 @click.option('--ws-host', default='localhost')
 @click.option('--ws-port', default=6789)
-def cli(terminal, url, api, username, password, ws_host, ws_port):
+@click.option('--app-root', default='app')
+def cli(terminal, api, username, password, http_host, http_port, ws_host,
+        ws_port, app_root):
     loop = asyncio.get_event_loop()
     screensaver = ScreenSaver()
     GPIO.setmode(GPIO.BOARD)
@@ -271,7 +273,9 @@ def cli(terminal, url, api, username, password, ws_host, ws_port):
         terminal
     )
     websocket = Websocket()
-    browser = Browser(url)
+    browser = Browser(
+        'http://localhost:{port}/index.html'.format(port=http_port)
+    )
 
     cardreader.callbacks.add(screensaver.on)
     cardreader.callbacks.add(webservice.clock)
@@ -281,7 +285,11 @@ def cli(terminal, url, api, username, password, ws_host, ws_port):
     webservice.waiters.add(websocket.connected)
     websocket.callbacks.add(webservice.ready)
 
+    app = web.Application()
+    app.router.add_static('/', app_root)
+
     tasks = asyncio.gather(
+        loop.create_server(app.make_handler(), http_host, http_port),
         webservice.authenticate(username, password),
         cardreader.run(),
         websockets.serve(websocket.connector, ws_host, ws_port),
