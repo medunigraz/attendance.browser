@@ -249,8 +249,8 @@ class Webservice:
 @click.option('--api')
 @click.option('--username')
 @click.option('--password')
-@click.option('--websocket-host', default='localhost')
-@click.option('--websocket-port', default=6789)
+@click.option('--ws-host', default='localhost')
+@click.option('--ws-port', default=6789)
 def cli(terminal, url, api, username, password, ws_host, ws_port):
     loop = asyncio.get_event_loop()
     screensaver = ScreenSaver()
