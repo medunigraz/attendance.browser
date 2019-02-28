@@ -1,4 +1,4 @@
 include README.rst
 include CHANGELOG.rst
 include LICENSE
-recursive-include src .po .mo
+recursive-include src *.po *.mo
