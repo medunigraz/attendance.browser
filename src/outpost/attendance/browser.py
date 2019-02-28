@@ -13,7 +13,8 @@ import websockets
 from pyrc522 import RFID
 from RPi import GPIO
 
-gettext.install('attendance', 'locale')
+locale = os.path.abspath(os.path.join(os.path.dirname(__file__), 'locale'))
+gettext.install('attendance', locale)
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 logging.basicConfig(level=logging.DEBUG)
