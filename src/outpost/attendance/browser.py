@@ -5,12 +5,15 @@ import json
 import logging
 import os
 
+import gettext
+
 import aiohttp
 
 import websockets
 from pyrc522 import RFID
 from RPi import GPIO
 
+gettext.install('attendance', 'locale')
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 logging.basicConfig(level=logging.DEBUG)
