@@ -175,7 +175,9 @@ class Webservice:
                             headers={
                                 **self.headers,
                                 **{
-                                    'Authorization': 'Token {0}'.format(credentials.get('token'))
+                                    'Authorization': 'Token {0}'.format(
+                                        credentials.get('token')
+                                    )
                                 }
                             }
                         )
@@ -197,7 +199,6 @@ class Webservice:
         }
         tasks = [callback(data) for callback in self.callbacks]
         await asyncio.gather(*tasks)
-
 
     async def clock(self, uid):
         for waiter in self.waiters:
