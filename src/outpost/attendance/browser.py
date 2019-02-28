@@ -249,7 +249,9 @@ class Webservice:
 @click.option('--api')
 @click.option('--username')
 @click.option('--password')
-def cli(terminal, url, api, username, password):
+@click.option('--websocket-host', default='localhost')
+@click.option('--websocket-port', default=6789)
+def cli(terminal, url, api, username, password, ws_host, ws_port):
     loop = asyncio.get_event_loop()
     screensaver = ScreenSaver()
     GPIO.setmode(GPIO.BOARD)
@@ -280,7 +282,7 @@ def cli(terminal, url, api, username, password):
     tasks = asyncio.gather(
         webservice.authenticate(username, password),
         cardreader.run(),
-        websockets.serve(websocket.connector, 'localhost', 6789),
+        websockets.serve(websocket.connector, ws_host, ws_port),
         browser.run()
     )
     loop.run_until_complete(tasks)
