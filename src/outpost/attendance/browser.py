@@ -36,35 +36,6 @@ class ScreenSaver:
         return await proc.wait()
 
 
-class Websocket:
-
-    clients = set()
-
-    async def register(self, websocket):
-        self.clients.add(websocket)
-
-    async def unregister(self, websocket):
-        self.clients.remove(websocket)
-
-    async def connector(self, websocket, path):
-        await self.register(websocket)
-        try:
-            greeting = json.dumps({
-                'type': 'ready',
-                'service': 'websocket',
-            })
-            await websocket.send(greeting)
-            while True:
-                message = await websocket.recv()
-                data = json.loads(message)
-        finally:
-            await self.unregister(websocket)
-
-    async def send(self, message):
-        tasks = [client.send(json.dumps(message)) for client in self.clients]
-        await asyncio.gather(*tasks)
-
-
 class Browser:
 
     def __init__(self, url):
@@ -98,6 +69,7 @@ class UIDCache:
 class CardReader:
 
     callbacks = set()
+    waiters = set()
 
     def __init__(self, reader, loop=None):
         if not loop:
@@ -116,6 +88,8 @@ class CardReader:
                 return uid
 
     async def run(self):
+        for waiter in self.waiters:
+            await waiter.wait()
         timer = None
         with concurrent.futures.ThreadPoolExecutor() as pool:
             while True:
@@ -133,26 +107,53 @@ class CardReader:
                         await asyncio.gather(*tasks)
 
 
+class Websocket:
+
+    clients = set()
+    callbacks = set()
+    connected = asyncio.Event()
+
+    async def connector(self, websocket, path):
+        self.clients.add(websocket)
+        try:
+            greeting = json.dumps({
+                'type': 'ready',
+                'service': 'websocket',
+            })
+            await websocket.send(greeting)
+            if not self.connected.is_set():
+                self.connected.set()
+            tasks = [callback(websocket) for callback in self.callbacks]
+            await asyncio.gather(*tasks)
+            while True:
+                message = await websocket.recv()
+                data = json.loads(message)
+        finally:
+            self.clients.remove(websocket)
+            if not self.clients:
+                self.connected.clear()
+
+    async def send(self, message):
+        tasks = [client.send(json.dumps(message)) for client in self.clients]
+        await asyncio.gather(*tasks)
+
+
 class Webservice:
 
     callbacks = set()
+    waiters = set()
     session = None
     headers = {
         'Content-Type': 'application/json'
     }
+    authenticated = asyncio.Event()
 
-    def __init__(self, base_url, username, password, terminal, loop=None):
-        if not loop:
-            loop = asyncio.get_event_loop()
+    def __init__(self, base_url, terminal):
         self.terminal = terminal
         self.token_url = '{b}/auth/token/'.format(b=base_url)
         self.clock_url = '{b}/v1/attendance/clock/'.format(b=base_url)
-        loop.run_until_complete(
-            self.get_token(username, password)
-        )
-        logger.debug('Got token')
 
-    async def get_token(self, username, password):
+    async def authenticate(self, username, password):
         logger.debug('Fetching new token')
         body = {
             'username': username,
@@ -167,6 +168,7 @@ class Webservice:
                         timeout=5
                     ) as resp:
                         resp.raise_for_status()
+                        logger.debug('Got token')
                         credentials = await resp.json()
                         self.session = aiohttp.ClientSession(
                             headers={
@@ -176,17 +178,29 @@ class Webservice:
                                 }
                             }
                         )
-                        # Notify all listeners that our API connection is ready
-                        data = {
-                            'type': 'ready',
-                            'service': 'api',
-                        }
-                        tasks = [callback(data) for callback in self.callbacks]
-                        await asyncio.gather(*tasks)
-                except aiohttp.ClientError:
+                        for waiter in self.waiters:
+                            await waiter.wait()
+                        if not self.authenticated.is_set():
+                            self.authenticated.set()
+                except (aiohttp.ClientError, aiohttp.HttpProcessingError) as e:
+                    logger.warn('Could not authenticate: {e}'.format(e=e))
                     await asyncio.sleep(5)
 
+    async def ready(self, *args):
+        await self.authenticated.wait()
+        # Notify all listeners that our API connection is ready
+        logger.debug('API is ready')
+        data = {
+            'type': 'ready',
+            'service': 'api',
+        }
+        tasks = [callback(data) for callback in self.callbacks]
+        await asyncio.gather(*tasks)
+
+
     async def clock(self, uid):
+        for waiter in self.waiters:
+            await waiter.wait()
         cardid = ''.join([('%X' % t).zfill(2) for t in uid[:4]])
         logger.debug('Clocking in card {c}'.format(c=cardid))
         data = {
@@ -214,7 +228,15 @@ class Webservice:
         except aiohttp.ClientError:
             data = {
                 'type': 'error',
-                'message': 'Network error'
+                'message': _('Network error')
+            }
+        except aiohttp.HttpProcessingError as e:
+            errors = {
+                404: _('Your card is invalid')
+            }
+            data = {
+                'type': 'error',
+                'message': errors.get(e.code, _('Network error'))
             }
         logger.debug('Calling webservice callbacks for {c}'.format(c=cardid))
         tasks = [callback(data) for callback in self.callbacks]
@@ -242,20 +264,21 @@ def cli(terminal, url, api, username, password):
     cardreader = CardReader(reader, loop)
     webservice = Webservice(
         api,
-        username,
-        password,
-        terminal,
-        loop
+        terminal
     )
     websocket = Websocket()
     browser = Browser(url)
 
     cardreader.callbacks.add(screensaver.on)
     cardreader.callbacks.add(webservice.clock)
+    cardreader.waiters.add(websocket.connected)
     webservice.callbacks.add(screensaver.on)
     webservice.callbacks.add(websocket.send)
+    webservice.waiters.add(websocket.connected)
+    websocket.callbacks.add(webservice.ready)
 
     tasks = asyncio.gather(
+        webservice.authenticate(username, password),
         cardreader.run(),
         websockets.serve(websocket.connector, 'localhost', 6789),
         browser.run()
