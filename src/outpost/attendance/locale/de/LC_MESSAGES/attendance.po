@@ -1,0 +1,25 @@
+# SOME DESCRIPTIVE TITLE.
+# Copyright (C) YEAR ORGANIZATION
+# FIRST AUTHOR <EMAIL@ADDRESS>, YEAR.
+#
+msgid ""
+msgstr ""
+"Project-Id-Version: 0.0.0\n"
+"POT-Creation-Date: 2019-02-28 09:09+0100\n"
+"PO-Revision-Date: YEAR-MO-DA HO:MI+ZONE\n"
+"Last-Translator: Michael Fladischer <michael.fladischer@medunigraz.at>\n"
+"Language-Team: O-AI <o-it-ai@lists.medunigraz.at>\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Generated-By: pygettext.py 1.5\n"
+
+
+#: browser.py:231 browser.py:239
+msgid "Network error"
+msgstr "Netzwerkfehler"
+
+#: browser.py:235
+msgid "Your card is invalid"
+msgstr "Ihre Karte ist ungültig"
+
