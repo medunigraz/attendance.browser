@@ -22,7 +22,7 @@ def read(*names, **kwargs):
 
 setup(
     name='outpost.attendance.browser',
-    version='0.2.1',
+    version='0.3.0',
     license='BSD',
     description='Outpost Attendance Browser',
     long_description='%s\n%s' % (
