@@ -61,9 +61,10 @@ setup(
     ],
     install_requires=[
         'Click',
-        'pyrc522',
-        'aiohttp',
-        'websockets',
         'RPi.GPIO',
+        'aiohttp',
+        'asyncio_dispatch',
+        'pyrc522',
+        'websockets',
     ]
 )
