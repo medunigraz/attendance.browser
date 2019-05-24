@@ -25,10 +25,7 @@ setup(
     license='BSD',
     use_scm_version=True,
     description='Outpost Attendance Browser',
-    long_description='%s\n%s' % (
-        re.compile('^.. start-badges.*^.. end-badges', re.M | re.S).sub('', read('README.rst')),
-        re.sub(':[a-z]+:`~?(.*?)`', r'``\1``', read('CHANGELOG.rst'))
-    ),
+    long_description= re.compile('^.. start-badges.*^.. end-badges', re.M | re.S).sub('', read('README.rst')),
     author='Michael Fladischer',
     author_email='michael.fladischer@medunigraz.at',
     url='https://github.com/medunigraz/outpost.attendance.browser',
