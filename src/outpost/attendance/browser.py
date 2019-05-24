@@ -16,6 +16,7 @@ from RPi import GPIO
 
 locale = os.path.abspath(os.path.join(os.path.dirname(__file__), 'locale'))
 gettext.install('attendance', locale)
+_ = gettext.gettext
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 logging.basicConfig(level=logging.DEBUG)
