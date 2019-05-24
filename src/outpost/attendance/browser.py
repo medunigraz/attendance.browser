@@ -6,11 +6,10 @@ import logging
 import os
 from functools import partial
 
-import aiohttp
 import click
 import graypy
 import websockets
-from aiohttp import web
+from aiohttp import ClientError, ClientSession, HttpProcessingError, web
 from asyncio_dispatch import Signal
 from pyrc522 import RFID
 from RPi import GPIO
@@ -21,7 +20,6 @@ _ = gettext.gettext
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 logging.basicConfig(level=logging.DEBUG)
-
 
 sounddetection = 12
 cardkey = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]
@@ -64,6 +62,22 @@ class Browser:
             await self.stop.send()
 
 
+class GraylogManager:
+
+    handler = None
+
+    async def update(self, message, **kwargs):
+        if self.handler in logger.handlers:
+            logger.removeHandler(self.handler)
+        if "graylog" not in message:
+            return
+        graylog = message.get("graylog")
+        self.handler = graypy.GELFUDPHandler(
+            graylog.get("hostname"), graylog.get("port")
+        )
+        logger.addHandler(self.handler)
+
+
 class RoomManager:
 
     rooms = list()
@@ -73,8 +87,7 @@ class RoomManager:
     connected = asyncio.Event()
     timer = None
 
-    def __init__(self, webservice, loop=None):
-        self.webservice = webservice
+    def __init__(self, loop=None):
         if not loop:
             self.loop = asyncio.get_event_loop()
         else:
@@ -82,7 +95,7 @@ class RoomManager:
 
     async def update(self, message, **kwargs):
         self.rooms = message.get("rooms")
-        logger.debug("Got rooms for terminal: {}".format(self.rooms))
+        logger.debug("Updated rooms for terminal: {}".format(self.rooms))
 
     async def select(self, uid, **kwargs):
         await self.connected.wait()
@@ -130,7 +143,6 @@ class UIDCache:
 class CardReader:
 
     scanned = Signal(uid=None)
-    waiters = set()
 
     def __init__(self, reader, loop=None):
         if not loop:
@@ -149,8 +161,6 @@ class CardReader:
                 return uid
 
     async def run(self):
-        for waiter in self.waiters:
-            await waiter.wait()
         timer = None
         with concurrent.futures.ThreadPoolExecutor() as pool:
             while True:
@@ -159,10 +169,9 @@ class CardReader:
                     if timer:
                         timer.cancel()
                         timer = None
-                    logger.info("Got UID: {u}".format(u=uid))
+                    logger.info("Scanned UID: {u}".format(u=uid))
                     self.cache.set(uid)
                     timer = self.loop.call_later(10, self.cache.reset)
-                    logger.debug("Sending signal send: {}".format(uid))
                     await self.scanned.send(uid=tuple(uid))
 
 
@@ -193,21 +202,6 @@ class Websocket:
         await asyncio.gather(*tasks)
 
 
-class GraylogManager:
-    handler = None
-
-    async def update(self, message):
-        if self.handler in logger.handlers:
-            logger.removeHandler(self.handler)
-        if "graylog" not in message:
-            return
-        graylog = message.get("graylog")
-        self.handler = graypy.GELFUDPHandler(
-            graylog.get("hostname"), graylog.get("port")
-        )
-        logger.addHandler(self.handler)
-
-
 class Webservice:
 
     session = None
@@ -219,11 +213,14 @@ class Webservice:
     progress = Signal(message=None)
     configured = Signal(message=None)
 
-    def __init__(self, base_url, terminal, username, password, loop):
+    def __init__(self, base_url, terminal, username, password, loop=None):
         self.terminal = terminal
         self.username = username
         self.password = password
-        self.loop = loop
+        if not loop:
+            self.loop = asyncio.get_event_loop()
+        else:
+            self.loop = loop
         self.token_url = "{b}/auth/token/".format(b=base_url)
         self.clock_url = "{b}/v1/attendance/clock/".format(b=base_url)
         self.config_url = "{b}/v1/attendance/terminal/{t}?expand=rooms".format(
@@ -231,9 +228,9 @@ class Webservice:
         )
 
     async def connect(self):
-        logger.debug("Fetching new token")
+        logger.info("Initiating new API connection")
         body = {"username": self.username, "password": self.password}
-        async with aiohttp.ClientSession(headers=self.headers) as session:
+        async with ClientSession(headers=self.headers) as session:
             while True:
                 if self.session:
                     await asyncio.sleep(10)
@@ -243,9 +240,9 @@ class Webservice:
                         self.token_url, data=json.dumps(body), timeout=5
                     ) as resp:
                         resp.raise_for_status()
-                        logger.debug("Got token")
+                        logger.info("Received authentication token")
                         credentials = await resp.json()
-                    self.session = aiohttp.ClientSession(
+                    self.session = ClientSession(
                         headers={
                             **self.headers,
                             **{
@@ -257,12 +254,12 @@ class Webservice:
                     )
                     if not self.connected.is_set():
                         self.connected.set()
-                    logger.debug("API is ready")
+                    logger.info("API is ready")
                     logger.debug("Starting periodic config pull")
                     self.config_task = asyncio.ensure_future(
                         self.config(), loop=self.loop
                     )
-                except (aiohttp.ClientError, aiohttp.HttpProcessingError) as e:
+                except (ClientError, HttpProcessingError) as e:
                     logger.warn("Could not authenticate: {e}".format(e=e))
                     await self.reset()
                 await asyncio.sleep(10)
@@ -275,13 +272,16 @@ class Webservice:
     async def config(self):
         while True:
             logger.debug("Fetch configuration {}".format(self.config_url))
-            async with self.session.get(self.config_url, timeout=5) as resp:
-                resp.raise_for_status()
-                logger.debug("Got config")
-                config = await resp.json()
-                await self.progress.send(message=config)
-            logger.debug("Got config response: {}".format(config))
-            self.configured.send(config)
+            try:
+                async with self.session.get(self.config_url, timeout=5) as resp:
+                    resp.raise_for_status()
+                    logger.debug("Received terminal configuration")
+                    config = await resp.json()
+                    await self.progress.send(message=config)
+                logger.debug("Got config response: {}".format(config))
+                self.configured.send(config)
+            except (ClientError, HttpProcessingError) as e:
+                logger.warn("Could not fetch configuration: {e}".format(e=e))
             await asyncio.sleep(300)
 
     async def status(self, **kwargs):
@@ -293,7 +293,7 @@ class Webservice:
     async def clock(self, uid, room, **kwargs):
         await self.connected.wait()
         cardid = "".join([("%X" % t).zfill(2) for t in uid[:4]])
-        logger.debug("Clocking in card {c} for {r}".format(c=cardid, r=room))
+        logger.info("Clocking in card {c} for {r}".format(c=cardid, r=room))
         await self.progress.send(message={"type": "request"})
         body = {"terminal": self.terminal, "cardid": cardid, "room": room.get("id")}
         try:
@@ -304,9 +304,11 @@ class Webservice:
                 response = await resp.json()
                 logger.debug("Got response for card: {j}".format(j=response))
                 data = {"type": "response", "payload": response}
-        except (aiohttp.ClientError, asyncio.TimeoutError):
+        except (ClientError, asyncio.TimeoutError) as e:
+            logger.warn("Could not connect to API: {e}".format(e=e))
             data = {"type": "error", "message": _("Network error")}
-        except aiohttp.HttpProcessingError as e:
+        except HttpProcessingError as e:
+            logger.warn("Could not send clock information: {e}".format(e=e))
             errors = {404: _("Your card is invalid")}
             data = {"type": "error", "message": errors.get(e.code, _("Network error"))}
         logger.debug("Sending webservice progress signal {c}".format(c=cardid))
@@ -338,11 +340,11 @@ def cli(
     )
     reader = RFID()
     cardreader = CardReader(reader, loop)
-    webservice = Webservice(api, terminal, username, password)
+    webservice = Webservice(api, terminal, username, password, loop)
     websocket = Websocket()
     browser = Browser("http://localhost:{port}/index.html".format(port=http_port))
-    rooms = RoomManager(webservice)
-    graylog = GraylogManager(webservice)
+    rooms = RoomManager()
+    graylog = GraylogManager()
 
     tasks = asyncio.gather(
         cardreader.scanned.connect(rooms.select),
@@ -356,6 +358,7 @@ def cli(
         webservice.unready.connect(websocket.send),
         webservice.progress.connect(websocket.send),
         webservice.configured.connect(graylog.update),
+        webservice.configured.connect(rooms.update),
     )
     loop.run_until_complete(tasks)
 
