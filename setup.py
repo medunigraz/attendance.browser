@@ -22,8 +22,8 @@ def read(*names, **kwargs):
 
 setup(
     name='outpost.attendance.browser',
-    version='0.2.1',
     license='BSD',
+    use_scm_version=True,
     description='Outpost Attendance Browser',
     long_description='%s\n%s' % (
         re.compile('^.. start-badges.*^.. end-badges', re.M | re.S).sub('', read('README.rst')),
@@ -59,6 +59,7 @@ setup(
         'websocket',
         'mfrc522',
     ],
+    setup_requires=['setuptools_scm'],
     install_requires=[
         'Click',
         'RPi.GPIO',
